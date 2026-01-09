@@ -4,14 +4,15 @@ import React, { useState } from "react";
 import { Post, FamilyMember } from "@memoshare/core/src/types";
 import { Heart, MessageCircle, Share2, MoreHorizontal, MapPin } from "lucide-react";
 import { cn } from "@memoshare/ui/src/utils";
-import { MOCK_FAMILY_MEMBERS } from "@memoshare/core/src/mock-data";
+
 
 interface PostCardProps {
     post: Post;
     author: FamilyMember;
+    members?: FamilyMember[];
 }
 
-export const PostCard = ({ post, author }: PostCardProps) => {
+export const PostCard = ({ post, author, members = [] }: PostCardProps) => {
     const [liked, setLiked] = useState(false);
     const [likesCount, setLikesCount] = useState(post.likes.length);
     const [showTags, setShowTags] = useState(false);
@@ -94,33 +95,65 @@ export const PostCard = ({ post, author }: PostCardProps) => {
             <div className="mb-4">
                 {renderContent(post.content)}
 
-                {/* Media Gallery */}
+                {/* Media Gallery (Smart Collage) */}
                 {post.media && post.media.length > 0 && (
-                    <div className="mt-4 grid gap-2 grid-cols-1">
-                        {post.media.map((m, idx) => (
-                            <div
-                                key={idx}
-                                className="relative rounded-2xl overflow-hidden group"
-                                onMouseEnter={() => setShowTags(true)}
-                                onMouseLeave={() => setShowTags(false)}
-                            >
-                                <img src={m.url} alt="Post content" className="w-full h-auto object-cover max-h-[500px]" />
+                    <div className={cn(
+                        "mt-4 grid gap-2 overflow-hidden rounded-2xl",
+                        post.media.length === 1 ? "grid-cols-1" :
+                            post.media.length === 2 ? "grid-cols-2" :
+                                post.media.length === 3 ? "grid-cols-2" : // 1 large, 2 small
+                                    "grid-cols-2" // 4+ (2x2 or similar)
+                    )}>
+                        {post.media.slice(0, 4).map((m, idx) => {
+                            // Logic for spanning cells
+                            const isFirst = idx === 0;
+                            const isThird = idx === 2;
+                            const count = post.media!.length;
 
-                                {/* Tags Overlay */}
-                                {showTags && m.tags?.map((tag, tIdx) => {
-                                    const taggedUser = MOCK_FAMILY_MEMBERS.find(u => u.id === tag.userId);
-                                    return (
-                                        <div
-                                            key={tIdx}
-                                            className="absolute bg-black/70 text-white text-xs px-2 py-1 rounded transform -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200"
-                                            style={{ left: `${tag.x}%`, top: `${tag.y}%` }}
-                                        >
-                                            {taggedUser?.firstName || "Ukjent"}
+                            let spanClass = "";
+                            if (count === 3 && isFirst) spanClass = "col-span-2"; // 1 top, 2 bottom
+
+                            return (
+                                <div
+                                    key={idx}
+                                    className={cn(
+                                        "relative overflow-hidden group cursor-pointer",
+                                        "aspect-square", // Default square aspect
+                                        count === 1 ? "aspect-auto max-h-[600px]" : "", // Single image natural aspect
+                                        spanClass
+                                    )}
+                                    onMouseEnter={() => setShowTags(true)}
+                                    onMouseLeave={() => setShowTags(false)}
+                                >
+                                    <img
+                                        src={m.url}
+                                        alt="Post content"
+                                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                    />
+
+                                    {/* Overlay for +X more images */}
+                                    {count > 4 && idx === 3 && (
+                                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center text-white font-bold text-2xl backdrop-blur-sm">
+                                            +{count - 4}
                                         </div>
-                                    );
-                                })}
-                            </div>
-                        ))}
+                                    )}
+
+                                    {/* Tags Overlay */}
+                                    {showTags && m.tags?.map((tag, tIdx) => {
+                                        const taggedUser = members.find(u => u.id === tag.userId);
+                                        return (
+                                            <div
+                                                key={tIdx}
+                                                className="absolute bg-black/70 text-white text-xs px-2 py-1 rounded transform -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200"
+                                                style={{ left: `${tag.x}%`, top: `${tag.y}%` }}
+                                            >
+                                                {taggedUser?.firstName || "Ukjent"}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
             </div>

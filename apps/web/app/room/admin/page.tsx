@@ -1,190 +1,160 @@
 "use client";
 
-import { useState } from "react";
-import { MOCK_FAMILY_MEMBERS } from "@memoshare/core";
+import React, { useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { FamilyMember } from "@memoshare/core";
-import { ArrowLeft, Mail, Shield, User, Plus } from "lucide-react";
-import Link from "next/link";
-import Image from "next/image";
+import { Heading, Text, Card, CardContent } from "@memoshare/ui";
+import { Trash2, UserPlus, Shield, ShieldAlert, User } from "lucide-react";
 
-export default function AdminPage() {
-    const [members, setMembers] = useState<FamilyMember[]>(MOCK_FAMILY_MEMBERS);
-    const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-    const [inviteEmail, setInviteEmail] = useState("");
+export default function FamilyRoomAdminPage() {
+    const [members, setMembers] = useState<FamilyMember[]>([]);
+    const [loading, setLoading] = useState(true);
+    const supabase = createClient();
 
-    const toggleRole = (id: string) => {
-        setMembers((prev) =>
-            prev.map((member) => {
-                if (member.id === id) {
-                    return {
-                        ...member,
-                        role: member.role === "admin" ? "contributor" : "admin",
-                    };
-                }
-                return member;
-            })
-        );
+    useEffect(() => {
+        fetchMembers();
+    }, []);
+
+    const fetchMembers = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { data: familyMembers } = await supabase
+            .from("family_members")
+            .select(`
+                *,
+                profiles (
+                    id, full_name, email, avatar_url
+                )
+            `)
+            .eq("user_id", user.id); // First get user's families
+
+        if (familyMembers && familyMembers.length > 0) {
+            const familyId = familyMembers[0].family_id;
+
+            // Now fetch all members of this family
+            const { data: allMembers } = await supabase
+                .from("family_members")
+                .select(`
+                    *,
+                    profiles (
+                        id, full_name, email, avatar_url
+                    )
+                `)
+                .eq("family_id", familyId);
+
+            if (allMembers) {
+                const mapped: FamilyMember[] = allMembers.map((m: any) => ({
+                    id: m.id,
+                    userId: m.user_id,
+                    firstName: m.profiles?.full_name?.split(" ")[0] || "Ukjent",
+                    lastName: m.profiles?.full_name?.split(" ").slice(1).join(" ") || "",
+                    role: m.role,
+                    avatarUrl: m.profiles?.avatar_url,
+                    email: m.profiles?.email,
+                }));
+                setMembers(mapped);
+            }
+        }
+        setLoading(false);
     };
 
-    const handleInvite = (e: React.FormEvent) => {
-        e.preventDefault();
-        // Simulate sending invitation
-        alert(`Invitasjon sendt til ${inviteEmail}`);
-        setInviteEmail("");
-        setIsInviteModalOpen(false);
+    const updateRole = async (memberId: string, newRole: "admin" | "contributor" | "member") => {
+        // Optimistic update
+        setMembers(prev => prev.map(m => m.id === memberId ? { ...m, role: newRole } : m));
+
+        const { error } = await supabase
+            .from("family_members")
+            .update({ role: newRole })
+            .eq("id", memberId);
+
+        if (error) {
+            console.error("Failed to update role", error);
+            alert("Kunne ikke endre rolle.");
+            fetchMembers(); // Revert
+        }
     };
+
+    const removeMember = async (memberId: string) => {
+        if (!confirm("Er du sikker på at du vil fjerne dette medlemmet?")) return;
+
+        // Optimistic update
+        setMembers(prev => prev.filter(m => m.id !== memberId));
+
+        const { error } = await supabase
+            .from("family_members")
+            .delete()
+            .eq("id", memberId);
+
+        if (error) {
+            console.error("Failed to remove member", error);
+            alert("Kunne ikke fjerne medlem.");
+            fetchMembers(); // Revert
+        }
+    };
+
+    if (loading) return <div className="p-8">Laster...</div>;
 
     return (
-        <div className="min-h-screen bg-[#FAFAF8] p-8">
-            <div className="max-w-4xl mx-auto">
-                <div className="mb-8 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                        <Link
-                            href="/"
-                            className="p-2 rounded-full hover:bg-gray-100 transition-colors"
-                        >
-                            <ArrowLeft className="w-6 h-6 text-gray-600" />
-                        </Link>
-                        <div>
-                            <h1 className="text-3xl font-bold text-[#2D3748]">
-                                Administrer Familierom
-                            </h1>
-                            <p className="text-gray-500 mt-1">
-                                Administrer medlemmer og rettigheter
-                            </p>
-                        </div>
-                    </div>
-                    <button
-                        onClick={() => setIsInviteModalOpen(true)}
-                        className="flex items-center gap-2 bg-[var(--primary)] text-white px-4 py-2 rounded-full hover:bg-opacity-90 transition-all shadow-sm"
-                    >
-                        <Plus className="w-5 h-5" />
-                        <span>Inviter medlem</span>
-                    </button>
+        <div className="container mx-auto p-4 md:p-8 space-y-8">
+            <div className="flex justify-between items-center">
+                <div className="space-y-2">
+                    <Heading level={2}>Familierom Admin</Heading>
+                    <Text variant="muted">Administrer medlemmer og roller i familien.</Text>
                 </div>
-
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                    <div className="p-6 border-b border-gray-100 bg-gray-50/50">
-                        <h2 className="text-lg font-semibold text-gray-700">
-                            Medlemmer ({members.length})
-                        </h2>
-                    </div>
-                    <div className="divide-y divide-gray-100">
-                        {members.map((member) => (
-                            <div
-                                key={member.id}
-                                className="p-6 flex items-center justify-between hover:bg-gray-50 transition-colors"
-                            >
-                                <div className="flex items-center gap-4">
-                                    <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center overflow-hidden border border-gray-200">
-                                        {member.avatarUrl ? (
-                                            <Image
-                                                src={member.avatarUrl}
-                                                alt={`${member.firstName} ${member.lastName}`}
-                                                width={48}
-                                                height={48}
-                                                className="w-full h-full object-cover"
-                                            />
-                                        ) : (
-                                            <User className="w-6 h-6 text-gray-400" />
-                                        )}
-                                    </div>
-                                    <div>
-                                        <h3 className="font-semibold text-gray-900">
-                                            {member.firstName} {member.lastName}
-                                        </h3>
-                                        <p className="text-sm text-gray-500">
-                                            {member.email || "Ingen e-post registrert"}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <div className="flex items-center gap-6">
-                                    <div className="flex items-center gap-3">
-                                        <span
-                                            className={`text-sm font-medium ${member.role === "admin"
-                                                ? "text-[var(--primary)]"
-                                                : "text-gray-500"
-                                                }`}
-                                        >
-                                            {member.role === "admin"
-                                                ? "Admin"
-                                                : "Bidragsyter"}
-                                        </span>
-                                        <button
-                                            onClick={() => toggleRole(member.id)}
-                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:ring-offset-2 ${member.role === "admin"
-                                                ? "bg-[var(--primary)]"
-                                                : "bg-gray-200"
-                                                }`}
-                                        >
-                                            <span
-                                                className={`${member.role === "admin"
-                                                    ? "translate-x-6"
-                                                    : "translate-x-1"
-                                                    } inline-block h-4 w-4 transform rounded-full bg-white transition-transform`}
-                                            />
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
+                <button className="flex items-center gap-2 px-4 py-2 bg-[var(--primary)] text-white rounded-[12px] font-medium hover:opacity-90 transition-opacity">
+                    <UserPlus size={20} />
+                    <span>Inviter ny</span>
+                </button>
             </div>
 
-            {/* Invite Modal */}
-            {isInviteModalOpen && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
-                        <div className="p-6 border-b border-gray-100">
-                            <h3 className="text-xl font-bold text-gray-900">
-                                Inviter familiemedlem
-                            </h3>
-                            <p className="text-sm text-gray-500 mt-1">
-                                Send en invitasjon via e-post for å bli med i familierommet.
-                            </p>
-                        </div>
-                        <form onSubmit={handleInvite} className="p-6">
-                            <div className="mb-4">
-                                <label
-                                    htmlFor="email"
-                                    className="block text-sm font-medium text-gray-700 mb-1"
-                                >
-                                    E-postadresse
-                                </label>
-                                <div className="relative">
-                                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                                    <input
-                                        type="email"
-                                        id="email"
-                                        required
-                                        value={inviteEmail}
-                                        onChange={(e) => setInviteEmail(e.target.value)}
-                                        className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent outline-none transition-all"
-                                        placeholder="ola.nordmann@eksempel.no"
-                                    />
+            <div className="grid gap-4">
+                {members.map((member) => (
+                    <Card key={member.id} className="overflow-hidden">
+                        <CardContent className="p-4 flex items-center justify-between">
+                            <div className="flex items-center gap-4">
+                                {member.avatarUrl ? (
+                                    <img src={member.avatarUrl} alt={member.firstName} className="w-12 h-12 rounded-full object-cover" />
+                                ) : (
+                                    <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 font-bold">
+                                        {member.firstName[0]}
+                                    </div>
+                                )}
+                                <div>
+                                    <h3 className="font-bold text-gray-900">{member.firstName} {member.lastName}</h3>
+                                    <p className="text-sm text-gray-500">{member.email || "Ingen e-post"}</p>
                                 </div>
                             </div>
-                            <div className="flex items-center justify-end gap-3 mt-6">
+
+                            <div className="flex items-center gap-4">
+                                <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg">
+                                    {member.role === "admin" && <ShieldAlert size={16} className="text-red-500" />}
+                                    {member.role === "contributor" && <Shield size={16} className="text-blue-500" />}
+                                    {member.role === "member" && <User size={16} className="text-gray-500" />}
+
+                                    <select
+                                        value={member.role}
+                                        onChange={(e) => updateRole(member.id, e.target.value as any)}
+                                        className="bg-transparent text-sm font-medium outline-none cursor-pointer"
+                                    >
+                                        <option value="admin">Admin</option>
+                                        <option value="contributor">Bidragsyter</option>
+                                        <option value="member">Medlem</option>
+                                    </select>
+                                </div>
+
                                 <button
-                                    type="button"
-                                    onClick={() => setIsInviteModalOpen(false)}
-                                    className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors font-medium"
+                                    onClick={() => removeMember(member.id)}
+                                    className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                                    title="Fjern medlem"
                                 >
-                                    Avbryt
-                                </button>
-                                <button
-                                    type="submit"
-                                    className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg hover:bg-opacity-90 transition-colors font-medium shadow-sm"
-                                >
-                                    Send invitasjon
+                                    <Trash2 size={20} />
                                 </button>
                             </div>
-                        </form>
-                    </div>
-                </div>
-            )}
+                        </CardContent>
+                    </Card>
+                ))}
+            </div>
         </div>
     );
 }

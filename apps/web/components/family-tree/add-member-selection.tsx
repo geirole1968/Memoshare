@@ -1,6 +1,7 @@
-import { Plus, User } from "lucide-react";
+"use client";
 
-export type RelationType = "father" | "mother" | "partner" | "brother" | "sister" | "son" | "daughter";
+import { Plus, User } from "lucide-react";
+import { RelationType } from "./types";
 
 interface AddMemberSelectionProps {
     isOpen: boolean;

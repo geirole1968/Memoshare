@@ -2,15 +2,16 @@
 
 import React, { useState } from "react";
 import { useChat } from "./chat-context";
-import { MOCK_FAMILY_MEMBERS } from "@memoshare/core/src/mock-data";
+import { useFamilyMembers } from "@/hooks/use-family-members";
 import { MessageCircle, X, Search } from "lucide-react";
 
 export const FamilyList = () => {
     const [isOpen, setIsOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const { startChat, currentUser } = useChat();
+    const { members } = useFamilyMembers();
 
-    const filteredMembers = MOCK_FAMILY_MEMBERS.filter(
+    const filteredMembers = members.filter(
         (m) =>
             m.id !== currentUser.id &&
             (m.firstName.toLowerCase().includes(searchQuery.toLowerCase()) ||

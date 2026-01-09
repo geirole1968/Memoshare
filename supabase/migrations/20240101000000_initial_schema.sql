@@ -2,7 +2,7 @@
 create extension if not exists "uuid-ossp";
 
 -- PROFILES
-create table profiles (
+create table if not exists profiles (
   id uuid references auth.users on delete cascade not null primary key,
   email text,
   full_name text,
@@ -12,20 +12,23 @@ create table profiles (
 
 alter table profiles enable row level security;
 
+drop policy if exists "Public profiles are viewable by everyone" on profiles;
 create policy "Public profiles are viewable by everyone"
   on profiles for select
   using ( true );
 
+drop policy if exists "Users can insert their own profile" on profiles;
 create policy "Users can insert their own profile"
   on profiles for insert
   with check ( auth.uid() = id );
 
+drop policy if exists "Users can update own profile" on profiles;
 create policy "Users can update own profile"
   on profiles for update
   using ( auth.uid() = id );
 
 -- FAMILIES
-create table families (
+create table if not exists families (
   id uuid default uuid_generate_v4() primary key,
   name text not null,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null,
@@ -35,7 +38,7 @@ create table families (
 alter table families enable row level security;
 
 -- FAMILY MEMBERS
-create table family_members (
+create table if not exists family_members (
   id uuid default uuid_generate_v4() primary key,
   family_id uuid references families(id) on delete cascade not null,
   user_id uuid references profiles(id) on delete cascade not null,
@@ -47,6 +50,7 @@ create table family_members (
 alter table family_members enable row level security;
 
 -- RLS for Families: Users can see families they are members of
+drop policy if exists "Users can view families they belong to" on families;
 create policy "Users can view families they belong to"
   on families for select
   using (
@@ -57,11 +61,13 @@ create policy "Users can view families they belong to"
     )
   );
 
+drop policy if exists "Users can create families" on families;
 create policy "Users can create families"
   on families for insert
   with check ( auth.uid() = created_by );
 
 -- RLS for Family Members
+drop policy if exists "Users can view members of their families" on family_members;
 create policy "Users can view members of their families"
   on family_members for select
   using (
@@ -73,7 +79,7 @@ create policy "Users can view members of their families"
   );
 
 -- POSTS (Feed)
-create table posts (
+create table if not exists posts (
   id uuid default uuid_generate_v4() primary key,
   family_id uuid references families(id) on delete cascade not null,
   author_id uuid references profiles(id) on delete cascade not null,
@@ -84,6 +90,7 @@ create table posts (
 
 alter table posts enable row level security;
 
+drop policy if exists "Users can view posts in their families" on posts;
 create policy "Users can view posts in their families"
   on posts for select
   using (
@@ -94,6 +101,7 @@ create policy "Users can view posts in their families"
     )
   );
 
+drop policy if exists "Users can create posts in their families" on posts;
 create policy "Users can create posts in their families"
   on posts for insert
   with check (
@@ -105,7 +113,7 @@ create policy "Users can create posts in their families"
   );
 
 -- COMMENTS
-create table comments (
+create table if not exists comments (
   id uuid default uuid_generate_v4() primary key,
   post_id uuid references posts(id) on delete cascade not null,
   author_id uuid references profiles(id) on delete cascade not null,
@@ -115,6 +123,7 @@ create table comments (
 
 alter table comments enable row level security;
 
+drop policy if exists "Users can view comments on visible posts" on comments;
 create policy "Users can view comments on visible posts"
   on comments for select
   using (
@@ -126,6 +135,7 @@ create policy "Users can view comments on visible posts"
     )
   );
 
+drop policy if exists "Users can create comments on visible posts" on comments;
 create policy "Users can create comments on visible posts"
   on comments for insert
   with check (
@@ -138,7 +148,7 @@ create policy "Users can create comments on visible posts"
   );
 
 -- CONVERSATIONS (Chat)
-create table conversations (
+create table if not exists conversations (
   id uuid default uuid_generate_v4() primary key,
   family_id uuid references families(id) on delete cascade not null,
   is_group boolean default false,
@@ -148,7 +158,7 @@ create table conversations (
 
 alter table conversations enable row level security;
 
-create table conversation_participants (
+create table if not exists conversation_participants (
   conversation_id uuid references conversations(id) on delete cascade not null,
   user_id uuid references profiles(id) on delete cascade not null,
   joined_at timestamp with time zone default timezone('utc'::text, now()) not null,
@@ -158,7 +168,7 @@ create table conversation_participants (
 alter table conversation_participants enable row level security;
 
 -- MESSAGES
-create table messages (
+create table if not exists messages (
   id uuid default uuid_generate_v4() primary key,
   conversation_id uuid references conversations(id) on delete cascade not null,
   sender_id uuid references profiles(id) on delete cascade not null,
@@ -169,6 +179,7 @@ create table messages (
 alter table messages enable row level security;
 
 -- RLS for Conversations
+drop policy if exists "Users can view conversations they are part of" on conversations;
 create policy "Users can view conversations they are part of"
   on conversations for select
   using (
@@ -180,6 +191,7 @@ create policy "Users can view conversations they are part of"
   );
 
 -- RLS for Messages
+drop policy if exists "Users can view messages in their conversations" on messages;
 create policy "Users can view messages in their conversations"
   on messages for select
   using (
@@ -190,6 +202,7 @@ create policy "Users can view messages in their conversations"
     )
   );
 
+drop policy if exists "Users can send messages to their conversations" on messages;
 create policy "Users can send messages to their conversations"
   on messages for insert
   with check (
@@ -200,21 +213,19 @@ create policy "Users can send messages to their conversations"
     )
   );
 
--- STORAGE BUCKETS (Setup via SQL is limited, usually done via API/Dashboard, but we can try to insert if storage schema exists)
--- Note: Supabase Storage policies are usually set in the `storage.buckets` and `storage.objects` tables.
--- We will assume the bucket 'family-media' is created manually or via a separate script for now, 
--- but we can add policies for `storage.objects` here if we want to be thorough.
-
 -- TRIGGER: Create profile on signup
 create or replace function public.handle_new_user()
 returns trigger as $$
 begin
   insert into public.profiles (id, email, full_name, avatar_url)
-  values (new.id, new.email, new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'avatar_url');
+  values (new.id, new.email, new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'avatar_url')
+  on conflict (id) do nothing;
   return new;
 end;
 $$ language plpgsql security definer;
 
+-- Drop trigger if exists to avoid error
+drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_user();

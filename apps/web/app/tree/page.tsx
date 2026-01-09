@@ -1,8 +1,5 @@
-"use client";
-
-import { Card, CardContent, CardHeader, CardTitle, Heading, Text } from "@memoshare/ui";
-import FamilyTree from "../../components/family-tree";
-import { MOCK_FAMILY_MEMBERS, MOCK_RELATIONSHIPS } from "@memoshare/core";
+import { Card, CardContent, Heading, Text } from "@memoshare/ui";
+import { FamilyTreeContainer } from "../../components/family-tree/family-tree-container";
 
 export default function TreePage() {
     return (
@@ -14,7 +11,7 @@ export default function TreePage() {
 
             <Card className="h-[calc(100vh-200px)] min-h-[600px]">
                 <CardContent className="h-full p-0">
-                    <FamilyTree members={MOCK_FAMILY_MEMBERS} relationships={MOCK_RELATIONSHIPS} />
+                    <FamilyTreeContainer />
                 </CardContent>
             </Card>
         </div>

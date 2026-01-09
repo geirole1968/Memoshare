@@ -13,6 +13,7 @@ export function Header() {
                         width={140}
                         height={32}
                         className="h-8 w-auto object-contain"
+                        style={{ width: "auto" }}
                         priority
                     />
                 </Link>
@@ -27,6 +28,9 @@ export function Header() {
                 </Link>
                 <Link href="/memories" className="text-sm font-medium text-gray-600 hover:text-[var(--primary)] transition-colors">
                     Minner
+                </Link>
+                <Link href="/campfire" className="text-sm font-medium text-gray-600 hover:text-[var(--primary)] transition-colors flex items-center gap-1">
+                    <span>🔥</span> Leirbål
                 </Link>
 
             </nav>
