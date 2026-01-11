@@ -143,6 +143,8 @@ export async function addFamilyMember(
         relationshipsToCreate.push(...data.additionalRelationships);
     }
 
+    const createdRelationships = [];
+
     for (const rel of relationshipsToCreate) {
         if (!newMemberId) continue;
 
@@ -185,7 +187,7 @@ export async function addFamilyMember(
                 break;
         }
 
-        const { error: relError } = await supabase
+        const { data: createdRel, error: relError } = await supabase
             .from("relationships")
             .insert({
                 family_id: familyId,
@@ -193,16 +195,20 @@ export async function addFamilyMember(
                 to_id: toId,
                 type: type,
                 status: rel.status
-            });
+            })
+            .select()
+            .single();
 
         if (relError) {
             console.error("Error creating relationship:", relError);
             // Continue creating other relationships even if one fails
+        } else if (createdRel) {
+            createdRelationships.push(mapRelationshipToUI(createdRel));
         }
     }
 
     revalidatePath("/tree");
-    return { success: true, member: newMember };
+    return { success: true, member: newMember, relationships: createdRelationships };
 }
 
 export async function updateFamilyMember(memberId: string, data: Partial<FamilyMember>) {

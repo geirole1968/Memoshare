@@ -70,6 +70,14 @@ export function FamilyTreeContainer() {
         }
     };
 
+    const handleRefresh = () => {
+        if (familyId) {
+            loadTreeData(familyId);
+        } else {
+            checkFamily();
+        }
+    };
+
     const handleFirstMemberSubmit = async (formData: Partial<FamilyMember>) => {
         addLog("Prøver å opprette familie...");
         setLoading(true);
@@ -140,6 +148,7 @@ export function FamilyTreeContainer() {
             members={data.members}
             relationships={data.relationships}
             familyId={familyId}
+            onRefresh={handleRefresh}
         />
     );
 }

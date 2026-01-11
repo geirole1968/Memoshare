@@ -24,9 +24,9 @@ export default function SpouseEdge({
             markerEnd={markerEnd}
             style={{
                 ...style,
-                strokeWidth: 2,
-                stroke: '#FF69B4', // Hot pink for love/partners? Or just a different color. Let's go with a warm color.
-                strokeDasharray: '5,5', // Dashed line
+                strokeWidth: 1.5,
+                stroke: '#9CA3AF', // Gray 400, matching CustomEdge
+                // strokeDasharray: '5,5', // Removed dashed line
             }}
         />
     );

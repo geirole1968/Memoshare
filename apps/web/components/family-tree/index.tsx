@@ -20,11 +20,11 @@ import {
     applyEdgeChanges
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import dagre from "dagre";
 import { FamilyMember, Relationship } from "@memoshare/core";
 import CustomNode from "./custom-node";
 import CustomEdge from "./custom-edge";
 import SpouseEdge from "./spouse-edge";
+import UnionNode from "./union-node";
 import { PersonDetailsModal } from "./person-details-modal";
 import { AddMemberSelection } from "./add-member-selection";
 import { RelationType } from "./types";
@@ -35,204 +35,380 @@ interface FamilyTreeProps {
     members: FamilyMember[];
     relationships: Relationship[];
     familyId: string;
+    onRefresh?: () => void;
 }
 
-export default function FamilyTree({ members, relationships, familyId }: FamilyTreeProps) {
+// Layout Constants
+const NODE_WIDTH = 150;
+const NODE_HEIGHT = 100;
+const SPOUSE_GAP = 50;
+const SIBLING_GAP = 50;
+const LEVEL_HEIGHT = 200;
+
+// Helper Types for Layout
+interface TreeNode {
+    id: string;
+    member: FamilyMember;
+    spouses: TreeNode[];
+    children: TreeNode[]; // Children of this person (from any spouse)
+    width: number;
+    x: number;
+    y: number;
+    generation: number;
+    // For layout calculation
+    childrenWidth: number;
+    spouseGroupWidth: number;
+}
+
+export default function FamilyTree({ members, relationships, familyId, onRefresh }: FamilyTreeProps) {
     console.log("FamilyTree rendered with:", { membersCount: members?.length, relationshipsCount: relationships?.length });
-    // State for modals
+
+    // Local state
+    const [localMembers, setLocalMembers] = useState<FamilyMember[]>(members);
+    const [localRelationships, setLocalRelationships] = useState<Relationship[]>(relationships);
+
+    useEffect(() => { setLocalMembers(members); }, [members]);
+    useEffect(() => { setLocalRelationships(relationships); }, [relationships]);
+
+    // Modal state
     const [selectedPerson, setSelectedPerson] = useState<FamilyMember | null>(null);
     const [isDetailsOpen, setIsDetailsOpen] = useState(false);
     const [isSelectionOpen, setIsSelectionOpen] = useState(false);
     const [isFormOpen, setIsFormOpen] = useState(false);
     const [relationType, setRelationType] = useState<RelationType | null>(null);
 
-    // Initial Nodes and Edges
-    // We use useMemo to avoid recalculating on every render, but we need to handle updates if props change
-    // Layout Graph
-    const getLayoutedElements = useCallback((nodes: Node[], edges: Edge[]) => {
-        console.log("getLayoutedElements called with:", { nodesCount: nodes.length, edgesCount: edges.length });
-        const dagreGraph = new dagre.graphlib.Graph();
-        dagreGraph.setDefaultEdgeLabel(() => ({}));
-
-        const nodeWidth = 150; // Increased width for better spacing
-        const nodeHeight = 100;
-        const rankSep = 100; // Vertical spacing
-        const nodeSep = 50;  // Horizontal spacing
-
-        dagreGraph.setGraph({
-            rankdir: 'TB',
-            ranksep: rankSep,
-            nodesep: nodeSep
-        });
-
-        // 1. Add all real nodes
-        nodes.forEach((node) => {
-            dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
-        });
-
-        // 2. Identify unions (spouse relationships)
-        const unions: Record<string, { id: string, spouses: string[] }> = {};
-        const spouseEdges = edges.filter(e => e.type === 'spouse');
-
-        spouseEdges.forEach(edge => {
-            const spouses = [edge.source, edge.target].sort();
-            const unionId = `union-${spouses.join('-')}`;
-
-            if (!unions[unionId]) {
-                unions[unionId] = { id: unionId, spouses };
-                // Add virtual union node
-                dagreGraph.setNode(unionId, { width: 10, height: 10 }); // Tiny node
-
-                // Connect spouses to union node
-                // Setting minlen to 0 or 1. If 1, union is below spouses.
-                // We want spouses on same rank. 
-                // Dagre doesn't support 'same rank' constraint easily without subgraphs.
-                // Standard trick: Spouses -> Union -> Children. 
-                // This puts Union at Rank+1, Children at Rank+2.
-                dagreGraph.setEdge(edge.source, unionId, { weight: 10, minlen: 1 });
-                dagreGraph.setEdge(edge.target, unionId, { weight: 10, minlen: 1 });
-            }
-        });
-
-        // 3. Handle Parent-Child relationships
-        const parentEdges = edges.filter(e => e.type !== 'spouse');
-        const childParents: Record<string, string[]> = {};
-
-        // Group parents for each child
-        parentEdges.forEach(edge => {
-            if (!childParents[edge.target]) {
-                childParents[edge.target] = [];
-            }
-            childParents[edge.target].push(edge.source);
-        });
-
-        // Connect children to appropriate source (Union or Parent)
-        Object.entries(childParents).forEach(([childId, parents]) => {
-            let connectedToUnion = false;
-
-            // Check if parents are in a union
-            if (parents.length === 2) {
-                const sortedParents = [...parents].sort();
-                const unionId = `union-${sortedParents.join('-')}`;
-                if (unions[unionId]) {
-                    // Connect Union -> Child
-                    dagreGraph.setEdge(unionId, childId, { weight: 10, minlen: 1 });
-                    connectedToUnion = true;
-                }
-            }
-
-            // If not connected via union (single parent or parents not married), connect directly
-            if (!connectedToUnion) {
-                parents.forEach(parentId => {
-                    dagreGraph.setEdge(parentId, childId, { weight: 1, minlen: 1 });
-                });
-            }
-        });
-
-        // 4. Run Layout
-        dagre.layout(dagreGraph);
-
-        // 5. Map positions back
-        const layoutedNodes = nodes.map((node) => {
-            const nodeWithPosition = dagreGraph.node(node.id);
-            return {
-                ...node,
-                position: {
-                    x: nodeWithPosition.x - nodeWidth / 2,
-                    y: nodeWithPosition.y - nodeHeight / 2,
-                },
-            };
-        });
-
-        // 6. Update spouse edges to use side handles
-        const layoutedEdges = edges.map(edge => {
-            if (edge.type === 'spouse') {
-                const sourceNode = layoutedNodes.find(n => n.id === edge.source);
-                const targetNode = layoutedNodes.find(n => n.id === edge.target);
-
-                if (sourceNode && targetNode) {
-                    if (sourceNode.position.x < targetNode.position.x) {
-                        // Source is Left, Target is Right
-                        return {
-                            ...edge,
-                            sourceHandle: 'right-source',
-                            targetHandle: 'left-target'
-                        };
-                    } else {
-                        // Source is Right, Target is Left
-                        return {
-                            ...edge,
-                            sourceHandle: 'left-source',
-                            targetHandle: 'right-target'
-                        };
-                    }
-                }
-            }
-            return edge;
-        });
-
-        return { nodes: layoutedNodes, edges: layoutedEdges };
-    }, []);
-
-    // ...
-
-
-
-    // Initial Nodes and Edges
-    // We use useMemo to avoid recalculating on every render, but we need to handle updates if props change
-    const initialNodes: Node[] = useMemo(() => members.map((member) => ({
-        id: member.id,
-        type: "familyMember",
-        data: {
-            label: member.firstName, // Reverted to only firstName as requested
-            avatarUrl: member.avatarUrl,
-            member,
-            onAddRelative: (member: FamilyMember) => {
-                setSelectedPerson(member);
-                setIsSelectionOpen(true);
-            }
-        },
-        position: { x: 0, y: 0 },
-    })), [members]);
-
-
-
-    const initialEdges: Edge[] = useMemo(() => relationships
-        .map((rel) => ({
-            id: rel.id,
-            source: rel.fromId,
-            target: rel.toId,
-            type: rel.type === 'spouse' ? "spouse" : "organic",
-            animated: rel.type === 'parent', // Only animate parent-child flow
-        })), [relationships]);
-
     const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-    // ...
+    const nodeTypes = useMemo(() => ({ familyMember: CustomNode, union: UnionNode }), []);
+    const edgeTypes = useMemo(() => ({ organic: CustomEdge, spouse: SpouseEdge }), []);
+
+    // --- RECURSIVE TREE LAYOUT ALGORITHM ---
+
+    const buildAndLayoutGraph = useCallback((members: FamilyMember[], relationships: Relationship[]) => {
+        const nodes: Node[] = [];
+        const edges: Edge[] = [];
+
+        // 1. Build Adjacency Lists
+        const memberMap = new Map<string, FamilyMember>();
+        members.forEach(m => memberMap.set(m.id, m));
+
+        const spouseMap = new Map<string, string[]>();
+        const childParentMap = new Map<string, string[]>();
+        const parentChildMap = new Map<string, string[]>();
+
+        relationships.forEach(r => {
+            if (['spouse', 'partner', 'husband', 'wife'].includes(r.type as string)) {
+                if (!spouseMap.has(r.fromId)) spouseMap.set(r.fromId, []);
+                if (!spouseMap.has(r.toId)) spouseMap.set(r.toId, []);
+                spouseMap.get(r.fromId)!.push(r.toId);
+                spouseMap.get(r.toId)!.push(r.fromId);
+            } else {
+                // Parent -> Child
+                if (!parentChildMap.has(r.fromId)) parentChildMap.set(r.fromId, []);
+                parentChildMap.get(r.fromId)!.push(r.toId);
+
+                if (!childParentMap.has(r.toId)) childParentMap.set(r.toId, []);
+                childParentMap.get(r.toId)!.push(r.fromId);
+            }
+        });
+
+        // 1b. Infer Spouses from Shared Children (Layout Consistency)
+        // If two people share a child, treat them as spouses for layout purposes, 
+        // even if no explicit spouse relationship exists.
+        childParentMap.forEach((parents, childId) => {
+            if (parents.length === 2) {
+                const [p1, p2] = parents;
+                if (!spouseMap.has(p1)) spouseMap.set(p1, []);
+                if (!spouseMap.has(p2)) spouseMap.set(p2, []);
+
+                if (!spouseMap.get(p1)!.includes(p2)) spouseMap.get(p1)!.push(p2);
+                if (!spouseMap.get(p2)!.includes(p1)) spouseMap.get(p2)!.push(p1);
+            }
+        });
+
+        // 2. Identify Roots (No parents in tree, or oldest generation)
+        // CRITICAL FIX: Do not treat someone as a root if they have a spouse who HAS parents.
+        // This ensures we traverse from the "blood" ancestry (e.g. Egil) down to the child (Geir Ole),
+        // rather than starting from the in-law (Line) and "capturing" Geir Ole before Egil gets to him.
+
+        const hasParents = (id: string) => {
+            const p = childParentMap.get(id);
+            return p && p.length > 0;
+        };
+
+        const roots = members.filter(m => {
+            // Must have no parents
+            if (hasParents(m.id)) return false;
+
+            // Check spouses
+            const spouseIds = spouseMap.get(m.id) || [];
+            const spouseHasParents = spouseIds.some(sId => hasParents(sId));
+
+            // If spouse has parents, let that tree handle this cluster (unless I am older? No, bloodline priority)
+            // Actually, if BOTH have parents, it's two merging trees. We pick one as primary or show both.
+            // But if I have NO parents and spouse HAS parents, I am definitely an in-law.
+            if (spouseHasParents) return false;
+
+            return true;
+        });
+
+        // Sort roots by birth date (Oldest first)
+        roots.sort((a, b) => {
+            const dateA = a.birthDate ? new Date(a.birthDate).getTime() : Number.MAX_SAFE_INTEGER; // No date = youngest/last
+            const dateB = b.birthDate ? new Date(b.birthDate).getTime() : Number.MAX_SAFE_INTEGER;
+            return dateA - dateB;
+        });
+
+        // 3. Build Tree Structure (Recursive)
+        const visited = new Set<string>();
+
+        const buildTree = (memberId: string, generation: number): TreeNode => {
+            visited.add(memberId);
+            const member = memberMap.get(memberId)!;
+
+            // Get Spouses
+            const spouseIds = spouseMap.get(memberId) || [];
+            const spouses: TreeNode[] = [];
+            spouseIds.forEach(sId => {
+                if (!visited.has(sId)) {
+                    visited.add(sId);
+                    spouses.push({
+                        id: sId,
+                        member: memberMap.get(sId)!,
+                        spouses: [], // Spouses of spouse? usually just back to member
+                        children: [],
+                        width: NODE_WIDTH,
+                        x: 0, y: 0, generation,
+                        childrenWidth: 0,
+                        spouseGroupWidth: NODE_WIDTH
+                    });
+                }
+            });
+
+            // Get Children (from this member AND their spouses)
+            const childrenIds = parentChildMap.get(memberId) || [];
+
+            const children: TreeNode[] = [];
+            childrenIds.forEach(cId => {
+                if (!visited.has(cId)) {
+                    children.push(buildTree(cId, generation + 1));
+                }
+            });
+
+            // Sort children by birth date
+            children.sort((a, b) => {
+                if (a.member.birthDate && b.member.birthDate)
+                    return new Date(a.member.birthDate).getTime() - new Date(b.member.birthDate).getTime();
+                return 0;
+            });
+
+            return {
+                id: memberId,
+                member,
+                spouses,
+                children,
+                width: 0, x: 0, y: 0, generation,
+                childrenWidth: 0,
+                spouseGroupWidth: 0
+            };
+        };
+
+        const forest: TreeNode[] = roots.map(r => {
+            if (visited.has(r.id)) return null;
+            return buildTree(r.id, 0);
+        }).filter(Boolean) as TreeNode[];
+
+        // 4. Calculate Widths (Recursive)
+        const calculateWidth = (node: TreeNode) => {
+            // 1. Calculate Spouse Group Width (Node + Spouses)
+            node.spouseGroupWidth = NODE_WIDTH + (node.spouses.length * (NODE_WIDTH + SPOUSE_GAP));
+
+            // 2. Calculate Children Width
+            let childrenTotalWidth = 0;
+            if (node.children.length > 0) {
+                node.children.forEach(child => {
+                    calculateWidth(child);
+                    childrenTotalWidth += child.width;
+                });
+                childrenTotalWidth += (node.children.length - 1) * SIBLING_GAP;
+            }
+            node.childrenWidth = childrenTotalWidth;
+
+            // 3. Total Width is Max of SpouseGroup and Children
+            node.width = Math.max(node.spouseGroupWidth, node.childrenWidth);
+        };
+
+        forest.forEach(root => calculateWidth(root));
+
+        // 5. Assign Positions (Recursive)
+        const assignPositions = (node: TreeNode, startX: number, startY: number) => {
+            node.x = startX;
+            node.y = startY;
+
+            // Distribute Spouses: Left and Right
+            // We alternate to keep the main node central-ish
+            const leftSpouses = node.spouses.filter((_, i) => i % 2 !== 0);
+            const rightSpouses = node.spouses.filter((_, i) => i % 2 === 0);
+
+            const leftSpousesWidth = leftSpouses.length * (NODE_WIDTH + SPOUSE_GAP);
+            // const rightSpousesWidth = rightSpouses.length * (NODE_WIDTH + SPOUSE_GAP);
+
+            // Center the Spouse Group within the Total Width
+            // The "Spouse Group" now includes LeftSpouses + Main + RightSpouses
+            const spouseGroupStartX = startX + (node.width - node.spouseGroupWidth) / 2;
+
+            // Main Member Position
+            const memberX = spouseGroupStartX + leftSpousesWidth;
+            const memberY = startY;
+
+            nodes.push({
+                id: node.id,
+                type: 'familyMember',
+                data: { label: node.member.firstName, avatarUrl: node.member.avatarUrl, member: node.member },
+                position: { x: memberX, y: memberY }
+            });
+
+            // Helper to add spouse and edge
+            const addSpouseNodeAndEdge = (spouse: TreeNode, x: number, direction: 'left' | 'right') => {
+                nodes.push({
+                    id: spouse.id,
+                    type: 'familyMember',
+                    data: { label: spouse.member.firstName, avatarUrl: spouse.member.avatarUrl, member: spouse.member },
+                    position: { x, y: memberY }
+                });
+
+                // Union Node
+                const sortedIds = [node.id, spouse.id].sort();
+                const unionId = `union-${sortedIds.join('-')}`;
+
+                // Position Union exactly between them
+                // If direction is left: Spouse (x) ... Main (memberX). Union at x + WIDTH + GAP/2 - 5
+                // If direction is right: Main (memberX) ... Spouse (x). Union at memberX + WIDTH + GAP/2 - 5
+
+                let unionX = 0;
+                if (direction === 'left') {
+                    unionX = x + NODE_WIDTH + (SPOUSE_GAP / 2) - 5;
+                } else {
+                    unionX = memberX + NODE_WIDTH + (SPOUSE_GAP / 2) - 5;
+                }
+
+                const unionY = memberY + 27;
+
+                if (!nodes.find(n => n.id === unionId)) {
+                    nodes.push({
+                        id: unionId,
+                        type: 'union',
+                        data: { label: '' },
+                        position: { x: unionX, y: unionY },
+                        style: { width: 1, height: 1, opacity: 0 }
+                    });
+                }
+
+                // Spouse Edge
+                edges.push({
+                    id: `spouse-${node.id}-${spouse.id}`,
+                    source: node.id,
+                    target: spouse.id,
+                    type: 'spouse',
+                    sourceHandle: direction === 'left' ? 'left-source' : 'right-source',
+                    targetHandle: direction === 'left' ? 'right-target' : 'left-target'
+                });
+
+                // Connect Union to Children
+                const mutualChildren = node.children.filter(child => {
+                    const parents = childParentMap.get(child.id) || [];
+                    return parents.includes(spouse.id);
+                });
+
+                mutualChildren.forEach(child => {
+                    edges.push({
+                        id: `edge-${unionId}-${child.id}`,
+                        source: unionId,
+                        target: child.id,
+                        type: 'organic',
+                        sourceHandle: 'source',
+                        targetHandle: 'top-target'
+                    });
+                });
+            };
+
+            // Position Left Spouses (growing outwards to the left)
+            // S3 - S1 - Main
+            // S1 is at memberX - (WIDTH + GAP)
+            // S3 is at memberX - 2*(WIDTH + GAP)
+            leftSpouses.forEach((spouse, i) => {
+                const x = memberX - ((i + 1) * (NODE_WIDTH + SPOUSE_GAP));
+                addSpouseNodeAndEdge(spouse, x, 'left');
+            });
+
+            // Position Right Spouses (growing outwards to the right)
+            // Main - S0 - S2
+            // S0 is at memberX + (WIDTH + GAP)
+            rightSpouses.forEach((spouse, i) => {
+                const x = memberX + ((i + 1) * (NODE_WIDTH + SPOUSE_GAP));
+                addSpouseNodeAndEdge(spouse, x, 'right');
+            });
+
+            // Position Children
+            if (node.children.length > 0) {
+                const childrenStartY = startY + LEVEL_HEIGHT;
+                // Center the children group within the Total Width
+                const childrenGroupStartX = startX + (node.width - node.childrenWidth) / 2;
+
+                let currentChildX = childrenGroupStartX;
+                node.children.forEach(child => {
+                    assignPositions(child, currentChildX, childrenStartY);
+                    currentChildX += child.width + SIBLING_GAP;
+                });
+            }
+        };
+
+        let currentRootX = 0;
+        forest.forEach(root => {
+            assignPositions(root, currentRootX, 0);
+            currentRootX += root.width + 100; // Gap between trees
+        });
+
+        // 6. Handle Single Parents (No Spouse, but has children)
+        const addSingleParentEdges = (node: TreeNode) => {
+            node.children.forEach(child => {
+                const parents = childParentMap.get(child.id) || [];
+                // If only 1 parent is known/in-tree
+                if (parents.length === 1 && parents[0] === node.id) {
+                    edges.push({
+                        id: `edge-${node.id}-${child.id}`,
+                        source: node.id,
+                        target: child.id,
+                        type: 'organic',
+                        sourceHandle: 'bottom-source',
+                        targetHandle: 'top-target'
+                    });
+                }
+                addSingleParentEdges(child);
+            });
+        };
+        forest.forEach(root => addSingleParentEdges(root));
+
+        return { nodes, edges };
+
+    }, []);
+
+    // Update nodes/edges when props change
+    useEffect(() => {
+        const { nodes: layoutedNodes, edges: layoutedEdges } = buildAndLayoutGraph(localMembers, localRelationships);
+        setNodes(layoutedNodes);
+        setEdges(layoutedEdges);
+    }, [localMembers, localRelationships, buildAndLayoutGraph]);
 
     const onConnect: OnConnect = useCallback(
         (connection) => setEdges((eds) => addEdge(connection, eds)),
         [setEdges]
     );
 
-    const nodeTypes = useMemo(() => ({ familyMember: CustomNode }), []);
-    const edgeTypes = useMemo(() => ({ organic: CustomEdge, spouse: SpouseEdge }), []);
-
-    // Update nodes/edges when props change
-    useEffect(() => {
-        console.log("useEffect triggered. InitialNodes:", initialNodes.length, "InitialEdges:", initialEdges.length);
-        const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
-            initialNodes,
-            initialEdges
-        );
-        console.log("Setting nodes and edges:", { nodes: layoutedNodes.length, edges: layoutedEdges.length });
-        setNodes(layoutedNodes);
-        setEdges(layoutedEdges);
-    }, [initialNodes, initialEdges, setNodes, setEdges, getLayoutedElements]);
-
     // Handlers
     const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
+        if (node.type === 'union') return;
         const member = node.data.member as FamilyMember;
         setSelectedPerson(member);
         setIsDetailsOpen(true);
@@ -250,117 +426,63 @@ export default function FamilyTree({ members, relationships, familyId }: FamilyT
     };
 
     const handleEditClick = () => {
-        setRelationType(null); // Editing existing
+        setRelationType(null);
         setIsDetailsOpen(false);
         setIsFormOpen(true);
     };
 
     const handleFormSubmit = async (data: any) => {
-        console.log("Form submitted:", data);
-
-        // Determine if we are editing or adding based on if we have a selected person AND no relation type (editing)
-        // OR if we passed initialData to the form.
-        // The form returns data.
-
-        // We need to know if we are editing.
-        // In handleEditClick we set relationType to null and selectedPerson is set.
         const isEditing = !relationType && selectedPerson;
 
         try {
             if (isEditing && selectedPerson) {
-                // Edit existing
                 const result = await updateFamilyMember(selectedPerson.id, data);
                 if (result.error) {
                     alert("Feil ved oppdatering: " + result.error);
+                } else {
+                    setLocalMembers((prev) => prev.map(m =>
+                        m.id === selectedPerson.id ? { ...m, ...data } : m
+                    ));
+                    if (onRefresh) onRefresh();
                 }
             } else {
-                // Add new
-                const additionalRelationships: any[] = [];
-
-                // Logic for inferring relationships
-                if (selectedPerson) {
-                    // Case 1: Adding a child. Check if selectedPerson (parent) has a spouse.
-                    if (['son', 'daughter'].includes(relationType || '')) {
-                        const spouseEdges = relationships.filter(r =>
-                            r.type === 'spouse' &&
-                            (r.fromId === selectedPerson.id || r.toId === selectedPerson.id)
-                        );
-
-                        for (const edge of spouseEdges) {
-                            const spouseId = edge.fromId === selectedPerson.id ? edge.toId : edge.fromId;
-                            const spouse = members.find(m => m.id === spouseId);
-
-                            if (spouse) {
-                                if (window.confirm(`Er ${spouse.firstName} også forelder til ${data.firstName}?`)) {
-                                    additionalRelationships.push({
-                                        relativeId: spouse.id,
-                                        relationType: 'child', // New person is child of spouse
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    // Case 2: Adding a parent. Check if selectedPerson (child) already has a parent.
-                    if (['father', 'mother'].includes(relationType || '')) {
-                        const parentEdges = relationships.filter(r =>
-                            r.type === 'parent' && r.toId === selectedPerson.id
-                        );
-
-                        for (const edge of parentEdges) {
-                            const parentId = edge.fromId;
-                            const parent = members.find(m => m.id === parentId);
-
-                            if (parent) {
-                                if (window.confirm(`Er ${data.firstName} partner med ${parent.firstName}?`)) {
-                                    additionalRelationships.push({
-                                        relativeId: parent.id,
-                                        relationType: 'spouse', // New person is spouse of existing parent
-                                        status: 'gift' // Default
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-
                 const result = await addFamilyMember(familyId, {
                     ...data,
                     relationType: relationType,
                     relativeId: selectedPerson?.id,
-                    additionalRelationships
                 });
+
                 if (result.error) {
                     alert("Feil ved opprettelse: " + result.error);
+                } else if (result.member) {
+                    setLocalMembers((prev) => [...prev, result.member!]);
+                    if (result.relationships) {
+                        setLocalRelationships((prev) => [...prev, ...result.relationships!]);
+                    }
+                    if (onRefresh) onRefresh();
                 }
             }
         } catch (e) {
             console.error(e);
             alert("En uventet feil oppstod");
         }
-
         setIsFormOpen(false);
     };
 
     const handleDelete = async (id: string) => {
-        // Confirmation is handled in AddMemberForm
-        console.log("handleDelete called for ID:", id);
-
         try {
             const result = await deleteFamilyMember(id);
-            console.log("deleteFamilyMember result:", result);
             if (result.error) {
                 alert("Feil ved sletting: " + result.error);
             } else {
-                // Remove from local state immediately
-                setNodes((nds) => nds.filter((node) => node.id !== id));
-                setEdges((eds) => eds.filter((edge) => edge.source !== id && edge.target !== id));
+                setLocalMembers((prev) => prev.filter(m => m.id !== id));
+                setLocalRelationships((prev) => prev.filter(r => r.fromId !== id && r.toId !== id));
+                if (onRefresh) onRefresh();
             }
         } catch (e) {
             console.error("Exception in handleDelete:", e);
             alert("En uventet feil oppstod");
         }
-
         setIsFormOpen(false);
         setIsDetailsOpen(false);
         setSelectedPerson(null);
@@ -382,20 +504,6 @@ export default function FamilyTree({ members, relationships, familyId }: FamilyT
                 <Background />
                 <Controls />
                 <MiniMap />
-
-                <div className="absolute top-4 right-4 z-10">
-                    <button
-                        onClick={() => {
-                            setRelationType(null);
-                            setSelectedPerson(null);
-                            setIsFormOpen(true);
-                        }}
-                        className="bg-[var(--primary)] text-white px-4 py-2 rounded-full shadow-lg hover:bg-opacity-90 transition-all flex items-center gap-2"
-                    >
-                        <span className="text-xl">+</span> Legg til person
-                    </button>
-                </div>
-
                 <PersonDetailsModal
                     member={selectedPerson}
                     isOpen={isDetailsOpen}
@@ -403,13 +511,11 @@ export default function FamilyTree({ members, relationships, familyId }: FamilyT
                     onAddRelative={handleAddRelativeClick}
                     onEdit={handleEditClick}
                 />
-
                 <AddMemberSelection
                     isOpen={isSelectionOpen}
                     onClose={() => setIsSelectionOpen(false)}
                     onSelect={handleRelationSelect}
                 />
-
                 {isFormOpen && (
                     <AddMemberForm
                         isOpen={isFormOpen}
@@ -420,8 +526,8 @@ export default function FamilyTree({ members, relationships, familyId }: FamilyT
                         relativeName={selectedPerson?.firstName || ''}
                         relativeId={selectedPerson?.id}
                         initialData={!relationType ? selectedPerson : null}
-                        existingMembers={members}
-                        relationships={relationships}
+                        existingMembers={localMembers}
+                        relationships={localRelationships}
                     />
                 )}
             </ReactFlow>

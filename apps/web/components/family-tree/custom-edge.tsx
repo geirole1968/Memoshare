@@ -1,5 +1,5 @@
 import React from 'react';
-import { BaseEdge, EdgeProps, getBezierPath } from '@xyflow/react';
+import { BaseEdge, EdgeProps, getSmoothStepPath } from '@xyflow/react';
 
 export default function CustomEdge({
     id,
@@ -12,41 +12,25 @@ export default function CustomEdge({
     style = {},
     markerEnd,
 }: EdgeProps) {
-    const [edgePath] = getBezierPath({
+    const [edgePath] = getSmoothStepPath({
         sourceX,
         sourceY,
         sourcePosition,
         targetX,
         targetY,
         targetPosition,
+        borderRadius: 0, // Sharp corners for "straight" look, or small radius
     });
 
     return (
-        <>
-            {/* Base Path */}
-            <BaseEdge path={edgePath} markerEnd={markerEnd} style={{ ...style, strokeWidth: 2, stroke: '#E5E7EB' }} />
-
-            {/* Animated Pulse Path */}
-            <BaseEdge
-                path={edgePath}
-                markerEnd={markerEnd}
-                style={{
-                    ...style,
-                    strokeWidth: 2,
-                    stroke: 'var(--primary)',
-                    strokeDasharray: 5,
-                    animation: 'dashdraw 30s linear infinite',
-                    opacity: 0.6
-                }}
-            />
-            <style>
-                {`
-          @keyframes dashdraw {
-            from { stroke-dashoffset: 500; }
-            to { stroke-dashoffset: 0; }
-          }
-        `}
-            </style>
-        </>
+        <BaseEdge
+            path={edgePath}
+            markerEnd={markerEnd}
+            style={{
+                ...style,
+                strokeWidth: 1.5,
+                stroke: '#9CA3AF', // Gray-400
+            }}
+        />
     );
 }
